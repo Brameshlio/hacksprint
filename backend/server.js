@@ -832,7 +832,7 @@ app.post('/api/verify/:childId', async (req, res) => {
       status: threatReport.isAnomaly ? 'AI_THREAT_FLAGGED' : 'GENUINE',
       anomalyScore: threatReport.anomalyScore,
       isThreat: threatReport.isAnomaly,
-      threatReason: threatReport.threatReason || (threatReport.isAnomaly ? 'AI Anomaly Forest Outlier Spikes' : '')
+      threatReason: threatReport.threatReason || (threatReport.isAnomaly ? 'Critical Outlier — AI Anomaly Forest Outlier Spikes (Bengaluru Node to Mumbai Hub via Impossible Speed Velocity)' : '')
     });
     await scanLog.save();
 

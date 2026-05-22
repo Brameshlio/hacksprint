@@ -105,11 +105,11 @@ def analyze_scan(payload: ScanTelemetry):
             is_anomaly = False
             normalized_threat_score = 0.10
             verdict = "STABLE SUPPLY VECTOR"
-        # 1. Scanned in London/New York inside minutes (impossible velocity delta)
+        # 1. Scanned in Bengaluru/Mumbai inside minutes (impossible velocity delta)
         elif payload.scan_velocity > 800.0 and payload.geo_distance_delta > 100.0:
             is_anomaly = True
             normalized_threat_score = 0.98
-            verdict = "CRITICAL THREAT: Impossible Travel Speed Detected."
+            verdict = "Inbound Scan Error — High Threat Index detected at Mumbai Fleet Terminal"
         # 2. Cloned barcode loop (scans count exceeds consumer bounds)
         elif payload.total_scan_count > 5:
             is_anomaly = True

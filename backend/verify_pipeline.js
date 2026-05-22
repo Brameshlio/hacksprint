@@ -48,9 +48,9 @@ async function runVerification() {
     // 3. Attempt verification of an INACTIVE container
     console.log(`\n🔍 Step 3: Consumer Frank scans INACTIVE child code ${generatedChildId}...`);
     const verifyRes1 = await axios.post(`${BASE_URL}/verify/${generatedChildId}`, {
-      lat: 40.7128,
-      lng: -74.0060,
-      locationName: 'NYC Retail Outlet'
+      lat: 12.9716,
+      lng: 77.5946,
+      locationName: 'KA-BLR Production Floor'
     });
     console.log(`- Response State: ${verifyRes1.data.status}`);
     console.log(`- Ripple Decision: ${verifyRes1.data.ripplePulse.toUpperCase()} GLOW`);
@@ -72,11 +72,11 @@ async function runVerification() {
     console.log(`✅ Carton activated. ${actRes.data.activatedUnits} children codes set to active.`);
 
     // 5. Verify the activated genuine container
-    console.log(`\n🔍 Step 5: Frank scans unit again at NYC Outlet...`);
+    console.log(`\n🔍 Step 5: Frank scans unit again at Bengaluru Hub...`);
     const verifyRes2 = await axios.post(`${BASE_URL}/verify/${generatedChildId}`, {
-      lat: 40.7128,
-      lng: -74.0060,
-      locationName: 'NYC Retail Outlet'
+      lat: 12.9716,
+      lng: 77.5946,
+      locationName: 'KA-BLR Production Floor'
     });
     console.log(`- Response State: ${verifyRes2.data.status}`);
     console.log(`- Ripple Decision: ${verifyRes2.data.ripplePulse.toUpperCase()} RIPPLE`);
@@ -89,11 +89,11 @@ async function runVerification() {
     }
 
     // 6. Test impossible velocity spatial-temporal travel checks
-    console.log(`\n🚨 Step 6: Triggering Impossible Travel Check (Scanning in London, UK 2 seconds later)...`);
+    console.log(`\n🚨 Step 6: Triggering Impossible Travel Check (Scanning in Mumbai, India 2 seconds later)...`);
     const verifyRes3 = await axios.post(`${BASE_URL}/verify/${generatedChildId}`, {
-      lat: 51.5074,
-      lng: -0.1278,
-      locationName: 'London Dock Terminal'
+      lat: 19.0760,
+      lng: 72.8777,
+      locationName: 'MH-BOM Retail Network'
     });
     console.log(`- Response State: ${verifyRes3.data.status}`);
     console.log(`- Ripple Decision: ${verifyRes3.data.ripplePulse.toUpperCase()} GLOW`);
