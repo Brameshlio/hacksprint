@@ -1,0 +1,41 @@
+{
+  "_format": "hh-sol-cache-2",
+  "files": {
+    "C:\\Users\\brame\\Desktop\\NutriChain\\backend\\contracts\\NutriChainProvenance.sol": {
+      "lastModificationDate": 1779433530221,
+      "contentHash": "4bc1b1bdc67c802205c5193838358ad9",
+      "sourceName": "contracts/NutriChainProvenance.sol",
+      "solcConfig": {
+        "version": "0.8.20",
+        "settings": {
+          "evmVersion": "paris",
+          "optimizer": {
+            "enabled": false,
+            "runs": 200
+          },
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [],
+      "versionPragmas": [
+        "^0.8.20"
+      ],
+      "artifacts": [
+        "NutriChainProvenance"
+      ]
+    }
+  }
+}
