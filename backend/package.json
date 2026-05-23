@@ -2,11 +2,11 @@
   "name": "nutrichain-backend",
   "version": "1.0.0",
   "description": "NutriChain AI Express + Hardhat Backend Service",
-  "main": "backend/server.js",
+  "main": "server.js",
   "scripts": {
-    "start": "node backend/server.js",
-    "dev": "node backend/server.js",
-    "mcp:start": "node backend/server/mcp_stitch_bridge.mjs",
+    "start": "node server.js",
+    "dev": "node server.js",
+    "mcp:start": "node server/mcp_stitch_bridge.mjs",
     "compile": "npx hardhat compile",
     "deploy:local": "npx hardhat run scripts/deploy.js --network localhost",
     "test": "jest"
