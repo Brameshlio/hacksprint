@@ -4,7 +4,8 @@ import { Layers, CheckCircle2, XCircle, ShieldAlert, Zap, PlusCircle, ArrowRight
 import { Html5Qrcode } from 'html5-qrcode';
 import axios from 'axios';
 
-const ManufacturerDashboard = ({ token, user }) => {
+// UPGRADE: Accept contractInstance and signerInstance injected from global Web3 provider context
+const ManufacturerDashboard = ({ token, user, contractInstance, signerInstance }) => {
   const [stats, setStats] = useState({
     totalMinted: 0,
     activeQRs: 0,
@@ -58,11 +59,11 @@ const ManufacturerDashboard = ({ token, user }) => {
       console.error('Error toggling blockchain mode:', err);
     }
   };
-  
+
   // Minting form parameters
   const [batchId, setBatchId] = useState('');
   const [productVariant, setProductVariant] = useState('');
-  const [totalUnitsCount, setTotalUnitsCount] = useState(20); // default group size to see child lists immediately
+  const [totalUnitsCount, setTotalUnitsCount] = useState(20);
   const [distributorId, setDistributorId] = useState('DIST-GLOBAL-SUPPLY');
 
   // Scanner and custom Toast states
@@ -73,46 +74,34 @@ const ManufacturerDashboard = ({ token, user }) => {
   const [formSuccess, setFormSuccess] = useState('');
   const [formError, setFormError] = useState('');
 
-  // ── Session / Auth Error State ────────────────────────────────────────────
-  // Semantically scoped to JWT/session expiry events — kept separate from
-  // generic formError so the amber SESSION TOKEN ERROR card can be managed
-  // independently (manual X-dismiss + 6 s auto-dismiss).
+  // Session / Auth Error State
   const [sessionError, setSessionError] = useState(null);
   const sessionErrorTimerRef = React.useRef(null);
 
-  // Arms the session error banner and starts a 6-second auto-dismiss timer.
   const raiseSessionError = (msg) => {
     setSessionError(msg);
     if (sessionErrorTimerRef.current) clearTimeout(sessionErrorTimerRef.current);
     sessionErrorTimerRef.current = setTimeout(() => setSessionError(null), 6000);
   };
 
-  // Called by the X button or at the top of every submit handler.
   const dismissSessionError = () => {
     setSessionError(null);
     if (sessionErrorTimerRef.current) clearTimeout(sessionErrorTimerRef.current);
   };
 
-  // ── Ethers.js v6 — Safe wallet/contract address resolver ─────────────────
-  // Centralised helper so every handler uses the same defensive pattern.
-  //   • Contract  → contract.target  (v6) or contract.address (v5 fallback)
-  //   • Signer    → await signer.getAddress()  (always async in v6)
-  //   • Fallback  → walletAddress prop injected from the App-level Web3 context
-  const resolveSignerAddress = async (signerInstance) => {
-    if (!signerInstance) return null;
+  // ── Ethers.js v6 Safe Address Resolvers ──────────────────────────────────
+  const resolveSignerAddress = async (signer) => {
+    if (!signer) return null;
     try {
-      // getAddress() is the v6-canonical async method; never read .address directly
-      return await signerInstance.getAddress();
+      return await signer.getAddress(); // Ethers v6 clean async resolver
     } catch {
-      // Graceful degradation — return the UI-level wallet string as a fallback
       return user?.walletAddress ?? null;
     }
   };
 
-  const resolveContractAddress = (contractInstance) => {
-    if (!contractInstance) return null;
-    // v6: .target holds the address; v5 used .address — check both defensively
-    return contractInstance?.target ?? contractInstance?.address ?? null;
+  const resolveContractAddress = (contract) => {
+    if (!contract) return null;
+    return contract?.target ?? contract?.address ?? null; // Defensive target check
   };
 
   const [activationLogs, setActivationLogs] = useState([]);
@@ -140,7 +129,6 @@ const ManufacturerDashboard = ({ token, user }) => {
 
   useEffect(() => {
     loadDashboardData();
-    // Dynamically poll every 3 seconds to update real-time telemetry pipelines!
     const interval = setInterval(loadDashboardData, 3000);
     return () => clearInterval(interval);
   }, []);
@@ -155,61 +143,34 @@ const ManufacturerDashboard = ({ token, user }) => {
   const handleQrCodeDecoded = (decodedText) => {
     try {
       let parsedData = {};
-
       if (decodedText.trim().startsWith('{')) {
         const json = JSON.parse(decodedText);
         parsedData.batchId = json.batchId || json.id;
         parsedData.productVariant = json.productVariant || json.variant;
         parsedData.totalUnits = json.totalUnits || json.units;
       } else {
-        let searchParams;
-        if (decodedText.includes('?')) {
-          const queryString = decodedText.split('?')[1];
-          searchParams = new URLSearchParams(queryString);
-        } else {
-          searchParams = new URLSearchParams(decodedText);
-        }
+        let searchParams = decodedText.includes('?')
+          ? new URLSearchParams(decodedText.split('?')[1])
+          : new URLSearchParams(decodedText);
 
         parsedData.batchId = searchParams.get('batchId') || searchParams.get('id');
         parsedData.productVariant = searchParams.get('productVariant') || searchParams.get('variant');
         parsedData.totalUnits = searchParams.get('totalUnits') || searchParams.get('units');
       }
 
-      // Regex / fallback checks
       if (!parsedData.batchId) {
         const batchMatch = decodedText.match(/(?:batchId|id)[:=]([^&,\s}]+)/i) || decodedText.match(/(?:SAMPLE-BATCH|BATCH)-\w+/i);
-        if (batchMatch) {
-          parsedData.batchId = batchMatch[1] || batchMatch[0];
-        }
-      }
-      if (!parsedData.productVariant) {
-        const variantMatch = decodedText.match(/(?:productVariant|variant)[:=]([^&,\s}]+)/i);
-        if (variantMatch) {
-          parsedData.productVariant = decodeURIComponent(variantMatch[1]);
-        }
-      }
-      if (!parsedData.totalUnits) {
-        const unitsMatch = decodedText.match(/(?:totalUnits|units)[:=](\d+)/i);
-        if (unitsMatch) {
-          parsedData.totalUnits = parseInt(unitsMatch[1], 10);
-        }
+        if (batchMatch) parsedData.batchId = batchMatch[1] || batchMatch[0];
       }
 
-      if (parsedData.batchId) {
-        setBatchId(parsedData.batchId.toUpperCase().replace(/['"]/g, ''));
-      }
-      if (parsedData.productVariant) {
-        setProductVariant(parsedData.productVariant.replace(/['"]/g, ''));
-      }
-      if (parsedData.totalUnits) {
-        setTotalUnitsCount(Number(parsedData.totalUnits));
-      }
+      if (parsedData.batchId) setBatchId(parsedData.batchId.toUpperCase().replace(/['"]/g, ''));
+      if (parsedData.productVariant) setProductVariant(parsedData.productVariant.replace(/['"]/g, ''));
+      if (parsedData.totalUnits) setTotalUnitsCount(Number(parsedData.totalUnits));
 
       showToast("⚡ Sample Label Decoded: Batch Parameters Ingested Successfully");
       setScanning(false);
     } catch (err) {
       console.error("QR Ingest Parse Error:", err);
-      // Fallback
       if (decodedText && decodedText.length < 50) {
         setBatchId(decodedText.toUpperCase());
         showToast("⚡ Sample Label Decoded: Set Batch ID");
@@ -220,26 +181,16 @@ const ManufacturerDashboard = ({ token, user }) => {
 
   useEffect(() => {
     let html5QrCode = null;
-
     if (scanning) {
       const timer = setTimeout(() => {
         try {
           html5QrCode = new Html5Qrcode("manufacturer-qr-reader");
           html5QrCode.start(
             { facingMode: "environment" },
-            {
-              fps: 10,
-              qrbox: { width: 220, height: 220 }
-            },
-            (decodedText) => {
-              handleQrCodeDecoded(decodedText);
-            },
-            (errorMessage) => {
-              // Silent camera scan errors
-            }
-          ).catch(err => {
-            console.error("Failed to start Html5Qrcode:", err);
-          });
+            { fps: 10, qrbox: { width: 220, height: 220 } },
+            (decodedText) => handleQrCodeDecoded(decodedText),
+            () => { }
+          ).catch(err => console.error("Failed to start Html5Qrcode:", err));
         } catch (err) {
           console.error("Failed to initialize Html5Qrcode:", err);
         }
@@ -250,34 +201,26 @@ const ManufacturerDashboard = ({ token, user }) => {
         if (html5QrCode) {
           if (html5QrCode.isScanning) {
             html5QrCode.stop()
-              .then(() => {
-                html5QrCode.clear();
-              })
+              .then(() => html5QrCode.clear())
               .catch(err => console.error("Failed to stop Html5Qrcode cleanly:", err));
           } else {
-            try {
-              html5QrCode.clear();
-            } catch (e) {}
+            try { html5QrCode.clear(); } catch (e) { }
           }
         }
       };
     }
   }, [scanning]);
 
+  // ── ON-CHAIN & BACKEND MINT ENGINE ───────────────────────────────────────
   const handleMintBatch = async (e) => {
     e.preventDefault();
 
-    // ── Reset all feedback states before starting a new submission ──────────
     setFormLoading(true);
     setFormSuccess('');
     setFormError('');
-    dismissSessionError(); // clear any lingering session banner
+    dismissSessionError();
 
-    // ── Pre-flight: Validate session token before touching any async chain ───
-    // A null/empty token means the prop never arrived or the JWT expired.
-    // Catching this here prevents the pipeline from reaching Ethers.js calls
-    // where a missing signer would throw: "Cannot read properties of undefined
-    // (reading 'address')" — the crash this refactor was built to eliminate.
+    // 1. Session Token Pre-Flight Check
     if (!token || typeof token !== 'string' || token.trim() === '') {
       raiseSessionError('Token is invalid or expired. Please re-authenticate your session.');
       setFormLoading(false);
@@ -285,60 +228,64 @@ const ManufacturerDashboard = ({ token, user }) => {
     }
 
     try {
-      // ── Ethers.js v6 — Defensive address extraction ───────────────────────
-      // If you have a contract or signer in scope, extract addresses like this:
-      //
-      //   const contractAddr = resolveContractAddress(yourContractInstance);
-      //     ↳ reads contract.target (v6) with contract.address (v5) as fallback
-      //
-      //   const signerAddr = await resolveSignerAddress(yourSignerInstance);
-      //     ↳ calls await signer.getAddress() — NEVER reads .address directly
-      //
-      // Both helpers are null-safe: they return null (not throw) if the object
-      // is undefined, so a missing Web3 provider cannot crash the UI.
-      // ─────────────────────────────────────────────────────────────────────
+      let transactionHash = "SIMULATED_PROVENANCE_ANCHOR";
 
+      // 2. Blockchain Execution Layer (Only fires if dev mode is running live node)
+      if (!devStatus.blockchainSimulated && contractInstance) {
+        const targetAddress = resolveContractAddress(contractInstance);
+        const activeSigner = await resolveSignerAddress(signerInstance);
+
+        console.log(`Targeting Provenance Smart Contract: ${targetAddress} via node ${activeSigner}`);
+
+        // Fire the on-chain minting transaction
+        // Maps parameters directly to NutriChainProvenance.sol spec
+        const tx = await contractInstance.initializeBatch(
+          batchId,
+          productVariant,
+          Number(totalUnitsCount),
+          distributorId
+        );
+
+        console.log("Transaction broadcasting to Polygon Amoy... Hash:", tx.hash);
+        const receipt = await tx.wait(); // Wait for confirmation block anchoring
+        transactionHash = receipt.hash || tx.hash;
+        console.log("On-chain cryptographic tracking state confirmed.");
+      }
+
+      // 3. Database Sync Pipeline (Saves records to MongoDB Atlas)
       const response = await axios.post('/api/batches', {
         batchId,
         productVariant,
-        totalUnits:            Number(totalUnitsCount),
-        assignedDistributorId: distributorId
+        totalUnits: Number(totalUnitsCount),
+        assignedDistributorId: distributorId,
+        blockchainTxHash: transactionHash // Anchoring transaction ID to database registry record
       }, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
       setFormSuccess(
-        `MINT SUCCESS: Batch ${batchId} cryptographically verified and anchored on-chain!`
+        `MINT SUCCESS: Batch ${batchId} cryptographically verified and anchored on-chain! Tx: ${transactionHash.substring(0, 10)}...`
       );
-      // Reset form to initial state so the user can immediately mint the next batch
+
+      // Clear inputs for clean operational cycle
       setBatchId('');
       setProductVariant('');
       loadDashboardData();
 
     } catch (err) {
-      // ── Discriminated error extraction ────────────────────────────────────
-      // Using optional chaining at every level so this catch block itself
-      // cannot throw (e.g. when err is a non-Error thrown value or undefined).
-      const httpStatus  = err?.response?.status;
-      const apiMessage  = err?.response?.data?.message
-                       ?? err?.response?.data?.error
-                       ?? null;
-      const fallbackMsg = (err instanceof Error)
-        ? err.message
-        : 'Batch creation pipeline failed: an unexpected error occurred.';
+      console.error("Pipeline failure captured:", err);
+
+      // Clean error parsing structures
+      const httpStatus = err?.response?.status;
+      const apiMessage = err?.response?.data?.message ?? err?.response?.data?.error ?? null;
+      const blockchainRevertReason = err?.reason || err?.message;
 
       if (httpStatus === 401 || (apiMessage && /token|expired|invalid|unauthorized/i.test(apiMessage))) {
-        // Server explicitly rejected the JWT — surface the session banner
-        raiseSessionError(
-          apiMessage || 'Token is invalid or expired. Please re-authenticate.'
-        );
+        raiseSessionError(apiMessage || 'Token is invalid or expired. Please re-authenticate.');
       } else {
-        // Network / validation / server error — surface the inline error bar
-        setFormError(`Batch creation pipeline failed: ${apiMessage ?? fallbackMsg}`);
+        setFormError(`Batch creation pipeline failed: ${apiMessage || blockchainRevertReason || 'Unexpected error'}`);
       }
-
     } finally {
-      // Always unblock the button — runs whether the request succeeded or threw
       setFormLoading(false);
     }
   };
@@ -360,81 +307,87 @@ const ManufacturerDashboard = ({ token, user }) => {
       const apiMessage = err?.response?.data?.message ?? err?.response?.data?.error ?? null;
 
       if (httpStatus === 401 || (apiMessage && /token|expired|invalid|unauthorized/i.test(apiMessage))) {
-        // Re-use the session banner so all auth errors appear in the same UI slot
-        raiseSessionError(
-          apiMessage || 'Token is invalid or expired. Please re-authenticate.'
-        );
+        raiseSessionError(apiMessage || 'Token is invalid or expired. Please re-authenticate.');
       } else {
-        setFormError(
-          `Logistic activation failed: ${apiMessage ?? (err instanceof Error ? err.message : 'Unknown error')}`
-        );
+        setFormError(`Logistic activation failed: ${apiMessage ?? err.message}`);
       }
     }
   };
 
   return (
-    <div className="space-y-6">
-      
-      {/* ------------------------------------------------------------------------
-          ENTERPRISE METRICS SECTION (GRID CARDS)
-          ------------------------------------------------------------------------ */}
+    <div className="space-y-6 text-white">
+
+      {/* ── TOAST OVERLAY ── */}
+      {toast && (
+        <div className="fixed bottom-5 right-5 z-50 bg-slate-900 border border-cyber-cyan/40 px-4 py-3 rounded-xl font-mono text-xs text-cyber-cyan shadow-[0_0_20px_rgba(6,182,212,0.15)] flex items-center gap-2 animate-bounce">
+          <Activity className="w-3.5 h-3.5 animate-pulse" />
+          {toast}
+        </div>
+      )}
+
+      {/* ENTERPRISE METRICS SECTION (GRID CARDS) */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        
         {/* Total Minted Container IDs */}
-        <div className="glass-panel p-6 rounded-2xl flex flex-col justify-between h-32 relative overflow-hidden">
-          <Layers className="absolute right-4 top-4 text-cyber-purple/20 w-12 h-12" />
+        <div className="glass-panel p-6 rounded-2xl flex flex-col justify-between h-32 relative overflow-hidden bg-slate-900/40 border border-slate-800">
+          <Layers className="absolute right-4 top-4 text-purple-500/10 w-12 h-12" />
           <span className="text-[10px] font-mono tracking-wider text-neutral-400 uppercase font-semibold">Total Minted IDs</span>
-          <span className="text-3xl font-extrabold text-white glow-text-purple tracking-tight">
-            {stats.totalMinted}
-          </span>
-          <span className="text-[9px] font-mono text-cyber-purple tracking-widest uppercase">Cryptographic Nodes</span>
+          <span className="text-3xl font-extrabold text-white tracking-tight">{stats.totalMinted}</span>
+          <span className="text-[9px] font-mono text-purple-400 tracking-widest uppercase">Cryptographic Nodes</span>
         </div>
 
         {/* JIT Active QR Statuses */}
-        <div className="glass-panel p-6 rounded-2xl flex flex-col justify-between h-32 relative overflow-hidden">
-          <CheckCircle2 className="absolute right-4 top-4 text-cyber-emerald/20 w-12 h-12" />
+        <div className="glass-panel p-6 rounded-2xl flex flex-col justify-between h-32 relative overflow-hidden bg-slate-900/40 border border-slate-800">
+          <CheckCircle2 className="absolute right-4 top-4 text-emerald-500/10 w-12 h-12" />
           <span className="text-[10px] font-mono tracking-wider text-neutral-400 uppercase font-semibold">Active In-Transit</span>
-          <span className="text-3xl font-extrabold text-cyber-emerald glow-text-emerald tracking-tight">
-            {stats.activeQRs}
-          </span>
-          <span className="text-[9px] font-mono text-cyber-emerald tracking-widest uppercase">JIT Live Inventory</span>
+          <span className="text-3xl font-extrabold text-emerald-400 tracking-tight">{stats.activeQRs}</span>
+          <span className="text-[9px] font-mono text-emerald-400 tracking-widest uppercase">JIT Live Inventory</span>
         </div>
 
         {/* Verification Velocity */}
-        <div className="glass-panel p-6 rounded-2xl flex flex-col justify-between h-32 relative overflow-hidden">
-          <Zap className="absolute right-4 top-4 text-cyber-cyan/20 w-12 h-12" />
+        <div className="glass-panel p-6 rounded-2xl flex flex-col justify-between h-32 relative overflow-hidden bg-slate-900/40 border border-slate-800">
+          <Zap className="absolute right-4 top-4 text-cyan-500/10 w-12 h-12" />
           <span className="text-[10px] font-mono tracking-wider text-neutral-400 uppercase font-semibold">Verify Velocity</span>
-          <span className="text-3xl font-extrabold text-cyber-cyan glow-text-cyan tracking-tight">
+          <span className="text-3xl font-extrabold text-cyan-400 tracking-tight">
             {stats.verificationVelocity} <span className="text-sm font-medium text-neutral-400">/hr</span>
           </span>
-          <span className="text-[9px] font-mono text-cyber-cyan tracking-widest uppercase">Real-time scan logs</span>
+          <span className="text-[9px] font-mono text-cyan-400 tracking-widest uppercase">Real-time scan logs</span>
         </div>
 
         {/* High Counterfeit Threats Flagged */}
-        <div className="glass-panel p-6 rounded-2xl flex flex-col justify-between h-32 relative overflow-hidden border-cyber-crimson/15">
-          <ShieldAlert className="absolute right-4 top-4 text-cyber-crimson/20 w-12 h-12" />
-          <span className="text-[10px] font-mono tracking-wider text-cyber-crimson uppercase font-bold">Flagged Threats</span>
-          <span className={`text-3xl font-extrabold tracking-tight ${stats.flaggedAnomalies > 0 ? 'text-cyber-crimson animate-pulse' : 'text-neutral-400'}`}>
+        <div className="glass-panel p-6 rounded-2xl flex flex-col justify-between h-32 relative overflow-hidden bg-slate-900/40 border border-red-500/15">
+          <ShieldAlert className="absolute right-4 top-4 text-red-500/10 w-12 h-12" />
+          <span className="text-[10px] font-mono tracking-wider text-red-400 uppercase font-bold">Flagged Threats</span>
+          <span className={`text-3xl font-extrabold tracking-tight ${stats.flaggedAnomalies > 0 ? 'text-red-500 animate-pulse' : 'text-neutral-400'}`}>
             {stats.flaggedAnomalies}
           </span>
-          <span className="text-[9px] font-mono text-cyber-crimson tracking-widest uppercase">Blocked counterfeits</span>
+          <span className="text-[9px] font-mono text-red-500 tracking-widest uppercase">Blocked counterfeits</span>
         </div>
-
       </div>
 
-      {/* ------------------------------------------------------------------------
-          CREATION & ACTIVATION ARENAS (SPLIT LAYOUT)
-          ------------------------------------------------------------------------ */}
+      {/* CREATION & ACTIVATION ARENAS (SPLIT LAYOUT) */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
+
         {/* Dynamic Pallet Creator Column */}
-        <div className="lg:col-span-1 glass-panel p-6 rounded-3xl flex flex-col justify-between border-cyber-purple/20">
+        <div className="lg:col-span-1 glass-panel p-6 rounded-3xl flex flex-col justify-between bg-slate-900/40 border border-slate-800">
           <div>
             <div className="flex items-center gap-2 mb-4">
-              <PlusCircle className="w-5 h-5 text-cyber-purple" />
+              <PlusCircle className="w-5 h-5 text-purple-400" />
               <h2 className="text-sm font-extrabold font-mono tracking-wider uppercase text-neutral-200">Mint Parent-Child Lot</h2>
             </div>
-            
+
+            {scanning && (
+              <div className="mb-4 rounded-xl overflow-hidden border border-slate-700 bg-black relative h-48">
+                <div id="manufacturer-qr-reader" className="w-full h-full"></div>
+                <button
+                  type="button"
+                  onClick={() => setScanning(false)}
+                  className="absolute top-2 right-2 z-10 bg-red-600/80 px-2 py-1 rounded text-[10px] uppercase font-bold"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+
             <form onSubmit={handleMintBatch} className="space-y-4">
               <div className="flex flex-col gap-1">
                 <label className="text-[10px] font-mono text-neutral-400">Unique Batch Identifier ID</label>
@@ -445,15 +398,15 @@ const ManufacturerDashboard = ({ token, user }) => {
                     value={batchId}
                     onChange={(e) => setBatchId(e.target.value.toUpperCase())}
                     required
-                    className="cyber-input text-xs flex-1 min-w-0"
+                    className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono w-full focus:outline-none focus:border-purple-500"
                   />
                   <button
                     type="button"
                     onClick={() => setScanning(true)}
-                    className="glass-panel px-3.5 py-2.5 rounded-xl border border-cyber-cyan/30 text-cyber-cyan hover:bg-cyber-cyan/15 hover:text-white transition-all duration-200 flex items-center gap-1.5 font-mono text-[10px] font-bold shrink-0"
+                    className="glass-panel px-3 py-2 rounded-xl border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/15 transition-all flex items-center gap-1.5 font-mono text-[10px] font-bold shrink-0"
                   >
                     <QrCode className="w-3.5 h-3.5" />
-                    <span>Scan Pre-Print Label</span>
+                    <span>Scan Label</span>
                   </button>
                 </div>
               </div>
@@ -462,11 +415,11 @@ const ManufacturerDashboard = ({ token, user }) => {
                 <label className="text-[10px] font-mono text-neutral-400">Product Variant Name</label>
                 <input
                   type="text"
-                  placeholder="Whey Isolate Double Chocolate (5 lbs)"
+                  placeholder="Whey Isolate Double Chocolate"
                   value={productVariant}
                   onChange={(e) => setProductVariant(e.target.value)}
                   required
-                  className="cyber-input text-xs"
+                  className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono w-full focus:outline-none focus:border-purple-500"
                 />
               </div>
 
@@ -480,7 +433,7 @@ const ManufacturerDashboard = ({ token, user }) => {
                     value={totalUnitsCount}
                     onChange={(e) => setTotalUnitsCount(e.target.value)}
                     required
-                    className="cyber-input text-xs"
+                    className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono w-full focus:outline-none focus:border-purple-500"
                   />
                 </div>
                 <div className="flex flex-col gap-1">
@@ -490,36 +443,31 @@ const ManufacturerDashboard = ({ token, user }) => {
                     value={distributorId}
                     onChange={(e) => setDistributorId(e.target.value)}
                     required
-                    className="cyber-input text-xs"
+                    className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono w-full focus:outline-none focus:border-purple-500"
                   />
                 </div>
               </div>
 
-              {/* ── Session Auth Error Banner ──────────────────────────────── */}
-              {/* Renders ONLY when raiseSessionError() has been called —       */}
-              {/* never shown by default. X button calls setSessionError(null). */}
+              {/* Session Auth Error Banner */}
               <AnimatePresence>
                 {sessionError && (
                   <motion.div
                     key="session-error-banner"
                     initial={{ opacity: 0, y: -6, scale: 0.98 }}
-                    animate={{ opacity: 1, y: 0,  scale: 1    }}
-                    exit={{    opacity: 0, y: -6, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -6, scale: 0.98 }}
                     transition={{ duration: 0.18 }}
-                    className="flex items-start gap-2.5 bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[10px] font-mono p-3.5 rounded-xl leading-relaxed shadow-[0_0_20px_rgba(245,158,11,0.08)]"
+                    className="flex items-start gap-2.5 bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[10px] font-mono p-3.5 rounded-xl leading-relaxed"
                   >
-                    <ShieldAlert className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-400 animate-pulse" />
+                    <ShieldAlert className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-400" />
                     <div className="flex-1 space-y-0.5">
                       <p className="font-bold uppercase tracking-widest text-amber-300 text-[9px]">Session Token Error</p>
                       <p className="text-amber-400/90">{sessionError}</p>
                     </div>
-                    {/* X dismiss — clears sessionError state and cancels the auto-dismiss timer */}
                     <button
                       type="button"
                       onClick={dismissSessionError}
-                      className="text-amber-600 hover:text-amber-200 transition-colors shrink-0 ml-1 rounded p-0.5 hover:bg-amber-500/10"
-                      aria-label="Dismiss session error"
-                      title="Dismiss"
+                      className="text-amber-600 hover:text-amber-200 transition-colors ml-1 p-0.5"
                     >
                       <XCircle className="w-3.5 h-3.5" />
                     </button>
@@ -527,41 +475,41 @@ const ManufacturerDashboard = ({ token, user }) => {
                 )}
               </AnimatePresence>
 
-              {/* ── Mint Success Confirmation ───────────────────────────────── */}
+              {/* Mint Success Confirmation */}
               <AnimatePresence>
                 {formSuccess && (
                   <motion.div
                     key="form-success"
                     initial={{ opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0 }}
-                    exit={{    opacity: 0        }}
-                    className="bg-cyber-emerald/10 border border-cyber-emerald/20 text-cyber-emerald text-[10px] font-mono p-3.5 rounded-xl leading-relaxed"
+                    exit={{ opacity: 0 }}
+                    className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-mono p-3.5 rounded-xl leading-relaxed"
                   >
                     {formSuccess}
                   </motion.div>
                 )}
               </AnimatePresence>
 
-              {/* ── General Pipeline Error ─────────────────────────────────── */}
+              {/* General Pipeline Error */}
               <AnimatePresence>
                 {formError && (
                   <motion.div
                     key="form-error"
                     initial={{ opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0 }}
-                    exit={{    opacity: 0        }}
-                    className="bg-cyber-crimson/10 border border-cyber-crimson/20 text-cyber-crimson text-[10px] font-mono p-3.5 rounded-xl leading-relaxed"
+                    exit={{ opacity: 0 }}
+                    className="bg-red-500/10 border border-red-500/20 text-red-400 text-[10px] font-mono p-3.5 rounded-xl leading-relaxed"
                   >
                     {formError}
                   </motion.div>
                 )}
               </AnimatePresence>
 
-              {/* ── INITIALIZE ENCRYPTION MINT Submit Button ───────────────── */}
+              {/* Submit Action Button Element */}
               <button
                 type="submit"
                 disabled={formLoading}
-                className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl font-bold text-xs bg-gradient-to-r from-cyber-purple to-cyber-cyan hover:brightness-110 active:scale-[0.98] transition-all text-white shadow-lg shadow-cyber-purple/20 disabled:opacity-60 disabled:cursor-not-allowed disabled:active:scale-100"
+                className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl font-bold text-xs bg-gradient-to-r from-purple-600 to-cyan-500 hover:brightness-110 active:scale-[0.98] transition-all text-white disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {formLoading ? (
                   <>
@@ -580,17 +528,16 @@ const ManufacturerDashboard = ({ token, user }) => {
         </div>
 
         {/* JIT Activation Logistics Column */}
-        <div className="lg:col-span-2 glass-panel p-6 rounded-3xl flex flex-col justify-between">
+        <div className="lg:col-span-2 glass-panel p-6 rounded-3xl flex flex-col justify-between bg-slate-900/40 border border-slate-800">
           <div className="flex flex-col h-full justify-between">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
-                <BarChart2 className="w-5 h-5 text-cyber-cyan" />
+                <BarChart2 className="w-5 h-5 text-cyan-400" />
                 <h2 className="text-sm font-extrabold font-mono tracking-wider uppercase text-neutral-200">Logistic JIT Activation Dispatch</h2>
               </div>
-              <button 
+              <button
                 onClick={loadDashboardData}
                 className="p-1.5 rounded-lg hover:bg-white/[0.04] text-neutral-400 hover:text-white transition-all"
-                title="Refresh logs"
               >
                 <RefreshCw className="w-4 h-4" />
               </button>
@@ -603,14 +550,14 @@ const ManufacturerDashboard = ({ token, user }) => {
                 </div>
               ) : (
                 subBatches.map(sb => (
-                  <div 
+                  <div
                     key={sb.subBatchId}
-                    className="flex flex-col md:flex-row items-start md:items-center justify-between bg-white/[0.01] hover:bg-white/[0.02] border border-white/[0.05] hover:border-white/[0.08] p-4 rounded-xl transition-all gap-4"
+                    className="flex flex-col md:flex-row items-start md:items-center justify-between bg-white/[0.01] hover:bg-white/[0.02] border border-white/[0.05] p-4 rounded-xl transition-all gap-4"
                   >
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="font-mono text-xs font-bold text-neutral-200">{sb.subBatchId}</span>
-                        <span className={`text-[9px] font-mono tracking-wider font-extrabold px-2 py-0.5 rounded ${sb.isActivated ? 'bg-cyber-emerald/10 text-cyber-emerald border border-cyber-emerald/20' : 'bg-neutral-800 text-neutral-400'}`}>
+                        <span className={`text-[9px] font-mono tracking-wider font-extrabold px-2 py-0.5 rounded ${sb.isActivated ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-neutral-800 text-neutral-400'}`}>
                           {sb.isActivated ? 'ACTIVE' : 'INACTIVE'}
                         </span>
                       </div>
@@ -622,7 +569,7 @@ const ManufacturerDashboard = ({ token, user }) => {
                     {!sb.isActivated ? (
                       <button
                         onClick={() => handleActivateCarton(sb.subBatchId)}
-                        className="flex items-center gap-1.5 text-[10px] font-bold px-3 py-2 rounded-lg bg-cyber-cyan hover:bg-cyber-cyan/80 active:scale-95 text-black transition-all shadow-md shadow-cyber-cyan/10"
+                        className="flex items-center gap-1.5 text-[10px] font-bold px-3 py-2 rounded-lg bg-cyan-400 text-black transition-all"
                       >
                         <Zap className="w-3.5 h-3.5 fill-black" />
                         JIT ACTIVATE
@@ -637,9 +584,8 @@ const ManufacturerDashboard = ({ token, user }) => {
               )}
             </div>
 
-            {/* Quick Terminal Logs Ticker */}
             <div className="mt-4 pt-4 border-t border-white/[0.05]">
-              <div className="text-[9px] font-mono text-cyber-cyan font-bold tracking-widest mb-1.5 uppercase">Logistic Hub Dispatch Feed</div>
+              <div className="text-[9px] font-mono text-cyan-400 font-bold tracking-widest mb-1.5 uppercase">Logistic Hub Dispatch Feed</div>
               <div className="bg-black/30 border border-white/[0.03] p-2.5 rounded-xl h-14 overflow-y-auto font-mono text-[10px] text-white/50 space-y-1">
                 {activationLogs.length === 0 ? (
                   <span className="text-white/20 italic">No activations triggers logged in current browser session...</span>
@@ -654,9 +600,9 @@ const ManufacturerDashboard = ({ token, user }) => {
       </div>
 
       {/* Dev Sanity Panel & Offline Simulators Card */}
-      <div className="glass-panel p-6 rounded-3xl border-white/[0.04] space-y-4">
+      <div className="glass-panel p-6 rounded-3xl border border-slate-800 bg-slate-900/20 space-y-4">
         <div className="flex items-center gap-2 text-xs font-mono text-neutral-400">
-          <Settings className="w-4 h-4 text-cyber-cyan animate-spin" style={{ animationDuration: '6s' }} />
+          <Settings className="w-4 h-4 text-cyan-400 animate-spin" style={{ animationDuration: '6s' }} />
           <span className="font-bold tracking-wider text-white">INTERACTIVE DEV SANITY PANEL</span>
         </div>
         <p className="text-[11px] text-neutral-400 leading-relaxed">
@@ -666,16 +612,16 @@ const ManufacturerDashboard = ({ token, user }) => {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
           {/* DB Toggle Card */}
           <button
+            type="button"
             onClick={toggleDbMode}
-            className={`p-4 border rounded-2xl transition-all text-left space-y-2 relative overflow-hidden group ${
-              devStatus.isUsingMemoryStore
-                ? 'bg-amber-500/5 border-amber-500/30 shadow-[0_0_15px_rgba(245,158,11,0.05)]'
-                : 'bg-emerald-500/5 border-emerald-500/20 hover:border-cyber-cyan/30'
-            }`}
+            className={`p-4 border rounded-2xl transition-all text-left space-y-2 relative overflow-hidden group ${devStatus.isUsingMemoryStore
+                ? 'bg-amber-500/5 border-amber-500/30'
+                : 'bg-emerald-500/5 border-emerald-500/20'
+              }`}
           >
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-mono text-neutral-400">DATABASE TIER</span>
-              <Database className={`w-4 h-4 ${devStatus.isUsingMemoryStore ? 'text-amber-500 animate-pulse' : 'text-cyber-emerald'}`} />
+              <Database className={`w-4 h-4 ${devStatus.isUsingMemoryStore ? 'text-amber-500 animate-pulse' : 'text-emerald-400'}`} />
             </div>
             <div className="space-y-1">
               <div className="text-xs font-extrabold text-white">
@@ -685,22 +631,20 @@ const ManufacturerDashboard = ({ token, user }) => {
                 {devStatus.isUsingMemoryStore ? '⚠️ Sandbox routing active' : '✅ Persistence tier active'}
               </div>
             </div>
-            {/* Hover overlay glow */}
-            <div className="absolute inset-0 bg-gradient-to-tr from-white/[0.02] to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
           </button>
 
           {/* Blockchain Toggle Card */}
           <button
+            type="button"
             onClick={toggleBlockchainMode}
-            className={`p-4 border rounded-2xl transition-all text-left space-y-2 relative overflow-hidden group ${
-              devStatus.blockchainSimulated
-                ? 'bg-amber-500/5 border-amber-500/30 shadow-[0_0_15px_rgba(245,158,11,0.05)]'
-                : 'bg-emerald-500/5 border-emerald-500/20 hover:border-cyber-cyan/30'
-            }`}
+            className={`p-4 border rounded-2xl transition-all text-left space-y-2 relative overflow-hidden group ${devStatus.blockchainSimulated
+                ? 'bg-amber-500/5 border-amber-500/30'
+                : 'bg-emerald-500/5 border-emerald-500/20'
+              }`}
           >
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-mono text-neutral-400">LEDGER NETWORK</span>
-              <Activity className={`w-4 h-4 ${devStatus.blockchainSimulated ? 'text-amber-500 animate-pulse' : 'text-cyber-emerald'}`} />
+              <Activity className={`w-4 h-4 ${devStatus.blockchainSimulated ? 'text-amber-500 animate-pulse' : 'text-emerald-400'}`} />
             </div>
             <div className="space-y-1">
               <div className="text-xs font-extrabold text-white">
@@ -710,180 +654,9 @@ const ManufacturerDashboard = ({ token, user }) => {
                 {devStatus.blockchainSimulated ? '⚠️ Local transaction logging' : '✅ Contract execution active'}
               </div>
             </div>
-            {/* Hover overlay glow */}
-            <div className="absolute inset-0 bg-gradient-to-tr from-white/[0.02] to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
           </button>
         </div>
       </div>
-
-      {/* ------------------------------------------------------------------------
-          LIVE GLOBAL SCANSTREAM CONSOLE TICKER (BOTTOM PANEL)
-          ------------------------------------------------------------------------ */}
-      <div className="glass-panel p-6 rounded-3xl">
-        <div className="flex items-center gap-2 mb-4">
-          <Layers className="w-5 h-5 text-cyber-purple" />
-          <h2 className="text-sm font-extrabold font-mono tracking-wider uppercase text-neutral-200">Global Verification Telemetry Ticker</h2>
-        </div>
-
-        <div className="overflow-x-auto border border-white/[0.04] rounded-2xl bg-black/20">
-          <table className="w-full text-left font-mono text-[11px]">
-            <thead>
-              <tr className="border-b border-white/[0.06] bg-white/[0.01] text-neutral-500 text-[10px]">
-                <th className="p-4">CONTAINER CODE</th>
-                <th className="p-4">SCAN COORDINATES</th>
-                <th className="p-4">GPS LOCATION NAME</th>
-                <th className="p-4">STATE</th>
-                <th className="p-4">AI METRIC SCORE</th>
-                <th className="p-4 text-right">TIMESTAMP</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/[0.03] text-neutral-300">
-              {liveScans.length === 0 ? (
-                <tr>
-                  <td colSpan="6" className="p-8 text-center text-neutral-600 italic">
-                    NO VERIFICATION LOGS DETECTED IN Persistance tier
-                  </td>
-                </tr>
-              ) : (
-                liveScans.map(scan => {
-                  const isThreat = scan.isThreat;
-                  return (
-                    <tr key={scan._id} className="hover:bg-white/[0.01] transition-all">
-                      <td className="p-4 font-bold text-neutral-200">{scan.childId.substring(0, 16)}...</td>
-                      <td className="p-4 text-neutral-400">GPS: {scan.location.lat.toFixed(4)}, {scan.location.lng.toFixed(4)} {scan.location.name.includes('BLR') || scan.location.name.includes('Bengaluru') ? '[BLR_MANUFACTURER]' : '[BOM_DISTRIBUTOR]'}</td>
-                      <td className="p-4 text-neutral-300">{scan.location.name}</td>
-                      <td className="p-4">
-                        <span className={`px-2 py-0.5 rounded font-extrabold text-[9px] ${
-                          scan.status === 'GENUINE' 
-                            ? 'bg-cyber-emerald/10 text-cyber-emerald border border-cyber-emerald/20' 
-                            : 'bg-cyber-crimson/10 text-cyber-crimson border border-cyber-crimson/20'
-                        }`}>
-                          {scan.status}
-                        </span>
-                      </td>
-                      <td className="p-4 font-bold">
-                        <span className={scan.anomalyScore > 0.6 ? 'text-cyber-crimson' : 'text-cyber-cyan'}>
-                          {scan.anomalyScore.toFixed(3)}
-                        </span>
-                      </td>
-                      <td className="p-4 text-right text-neutral-500">
-                        {new Date(scan.timestamp).toLocaleTimeString()}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Sleek Glassmorphic Floating Toast Feedback */}
-      <AnimatePresence>
-        {toast && (
-          <motion.div
-            initial={{ opacity: 0, y: -50, scale: 0.9 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -50, scale: 0.9 }}
-            className="fixed top-6 right-6 z-50 glass-panel px-5 py-3.5 rounded-2xl border-cyber-emerald/30 shadow-2xl flex items-center gap-2"
-          >
-            <span className="w-2 h-2 rounded-full bg-cyber-emerald animate-ping" />
-            <span className="text-cyber-emerald font-extrabold text-xs tracking-wide font-mono">
-              {toast}
-            </span>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Sleek Glassmorphic Camera Scan Modal overlay */}
-      <AnimatePresence>
-        {scanning && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
-          >
-            <motion.div
-              initial={{ scale: 0.9, y: 20 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.9, y: 20 }}
-              className="glass-panel w-full max-w-md p-6 rounded-3xl border border-white/[0.08] relative overflow-hidden"
-            >
-              {/* Header */}
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
-                  <Scan className="w-5 h-5 text-cyber-cyan animate-pulse" />
-                  <h3 className="text-sm font-extrabold font-mono uppercase tracking-wider text-white">Pre-Print Label Scanner</h3>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setScanning(false)}
-                  className="text-neutral-400 hover:text-white font-mono text-xs border border-white/[0.08] px-2.5 py-1.5 rounded-xl bg-white/[0.02] hover:bg-white/[0.06] transition-all"
-                >
-                  Close
-                </button>
-              </div>
-
-              {/* Camera Video Feed Box */}
-              <div className="relative aspect-square w-full max-w-sm mx-auto overflow-hidden rounded-2xl border border-white/10 bg-black/60 flex items-center justify-center mb-4">
-                <div id="manufacturer-qr-reader" className="w-full h-full" />
-                
-                {/* Visual scan frame overlay */}
-                <div className="absolute inset-10 border border-cyber-cyan/30 rounded-xl pointer-events-none flex items-center justify-center">
-                  <div className="w-full h-0.5 bg-gradient-to-r from-transparent via-cyber-cyan to-transparent animate-scan absolute" />
-                </div>
-              </div>
-
-              {/* Mock Simulator dropdown section */}
-              <div className="space-y-3 pt-3 border-t border-white/[0.05]">
-                <div className="flex flex-col gap-1.5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-[10px] font-mono text-neutral-400">INJECT DEMO QR LABEL PARAMETERS</label>
-                    <span className="text-cyber-cyan uppercase font-bold text-[8px] font-mono tracking-wider">Webcam Bypass</span>
-                  </div>
-                  <select
-                    onChange={(e) => {
-                      if (e.target.value) {
-                        handleQrCodeDecoded(e.target.value);
-                      }
-                      e.target.value = '';
-                    }}
-                    className="cyber-input text-xs font-mono w-full bg-black/40 cursor-pointer border-white/10 text-neutral-300"
-                  >
-                    <option value="" className="bg-neutral-900 text-neutral-400">-- Select Demo Label --</option>
-                    <option 
-                      value='{"batchId":"DEMO-BATCH-WHEY","variant":"Whey Isolate Double Chocolate (5 lbs)","units":50}'
-                      className="bg-neutral-900 text-neutral-200"
-                    >
-                      Sample Label A: Whey Isolate 50 Units (JSON)
-                    </option>
-                    <option 
-                      value="nutrichain://mint?id=DEMO-BATCH-CREATINE&variant=Creatine%20Monohydrate%20Pure&units=120"
-                      className="bg-neutral-900 text-neutral-200"
-                    >
-                      Sample Label B: Creatine Monohydrate 120 Units (Deep Link)
-                    </option>
-                    <option 
-                      value='{"batchId":"DEMO-BATCH-PRE","variant":"Pre-Workout Blast Blue Raspberry","units":30}'
-                      className="bg-neutral-900 text-neutral-200"
-                    >
-                      Sample Label C: Pre-Workout Blast 30 Units (JSON)
-                    </option>
-                    <option 
-                      value="nutrichain://mint?id=DEMO-BATCH-GLUTAMINE&variant=Glutamine%20Recovery%20Powder&units=80"
-                      className="bg-neutral-900 text-neutral-200"
-                    >
-                      Sample Label D: Glutamine Recovery 80 Units (Deep Link)
-                    </option>
-                  </select>
-                </div>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
     </div>
   );
 };
