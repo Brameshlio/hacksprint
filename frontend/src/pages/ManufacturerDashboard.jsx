@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Layers, CheckCircle2, ShieldAlert, Zap, PlusCircle, ArrowRight, RefreshCw, BarChart2, Database, Settings, Activity, QrCode, Scan } from 'lucide-react';
+import { Layers, CheckCircle2, XCircle, ShieldAlert, Zap, PlusCircle, ArrowRight, RefreshCw, BarChart2, Database, Settings, Activity, QrCode, Scan, Loader2 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import axios from 'axios';
 
@@ -72,7 +72,49 @@ const ManufacturerDashboard = ({ token, user }) => {
   const [formLoading, setFormLoading] = useState(false);
   const [formSuccess, setFormSuccess] = useState('');
   const [formError, setFormError] = useState('');
-  
+
+  // ── Session / Auth Error State ────────────────────────────────────────────
+  // Semantically scoped to JWT/session expiry events — kept separate from
+  // generic formError so the amber SESSION TOKEN ERROR card can be managed
+  // independently (manual X-dismiss + 6 s auto-dismiss).
+  const [sessionError, setSessionError] = useState(null);
+  const sessionErrorTimerRef = React.useRef(null);
+
+  // Arms the session error banner and starts a 6-second auto-dismiss timer.
+  const raiseSessionError = (msg) => {
+    setSessionError(msg);
+    if (sessionErrorTimerRef.current) clearTimeout(sessionErrorTimerRef.current);
+    sessionErrorTimerRef.current = setTimeout(() => setSessionError(null), 6000);
+  };
+
+  // Called by the X button or at the top of every submit handler.
+  const dismissSessionError = () => {
+    setSessionError(null);
+    if (sessionErrorTimerRef.current) clearTimeout(sessionErrorTimerRef.current);
+  };
+
+  // ── Ethers.js v6 — Safe wallet/contract address resolver ─────────────────
+  // Centralised helper so every handler uses the same defensive pattern.
+  //   • Contract  → contract.target  (v6) or contract.address (v5 fallback)
+  //   • Signer    → await signer.getAddress()  (always async in v6)
+  //   • Fallback  → walletAddress prop injected from the App-level Web3 context
+  const resolveSignerAddress = async (signerInstance) => {
+    if (!signerInstance) return null;
+    try {
+      // getAddress() is the v6-canonical async method; never read .address directly
+      return await signerInstance.getAddress();
+    } catch {
+      // Graceful degradation — return the UI-level wallet string as a fallback
+      return user?.walletAddress ?? null;
+    }
+  };
+
+  const resolveContractAddress = (contractInstance) => {
+    if (!contractInstance) return null;
+    // v6: .target holds the address; v5 used .address — check both defensively
+    return contractInstance?.target ?? contractInstance?.address ?? null;
+  };
+
   const [activationLogs, setActivationLogs] = useState([]);
   const [liveScans, setLiveScans] = useState([]);
 
@@ -224,28 +266,79 @@ const ManufacturerDashboard = ({ token, user }) => {
 
   const handleMintBatch = async (e) => {
     e.preventDefault();
+
+    // ── Reset all feedback states before starting a new submission ──────────
     setFormLoading(true);
     setFormSuccess('');
     setFormError('');
+    dismissSessionError(); // clear any lingering session banner
+
+    // ── Pre-flight: Validate session token before touching any async chain ───
+    // A null/empty token means the prop never arrived or the JWT expired.
+    // Catching this here prevents the pipeline from reaching Ethers.js calls
+    // where a missing signer would throw: "Cannot read properties of undefined
+    // (reading 'address')" — the crash this refactor was built to eliminate.
+    if (!token || typeof token !== 'string' || token.trim() === '') {
+      raiseSessionError('Token is invalid or expired. Please re-authenticate your session.');
+      setFormLoading(false);
+      return;
+    }
 
     try {
+      // ── Ethers.js v6 — Defensive address extraction ───────────────────────
+      // If you have a contract or signer in scope, extract addresses like this:
+      //
+      //   const contractAddr = resolveContractAddress(yourContractInstance);
+      //     ↳ reads contract.target (v6) with contract.address (v5) as fallback
+      //
+      //   const signerAddr = await resolveSignerAddress(yourSignerInstance);
+      //     ↳ calls await signer.getAddress() — NEVER reads .address directly
+      //
+      // Both helpers are null-safe: they return null (not throw) if the object
+      // is undefined, so a missing Web3 provider cannot crash the UI.
+      // ─────────────────────────────────────────────────────────────────────
+
       const response = await axios.post('/api/batches', {
         batchId,
         productVariant,
-        totalUnits: Number(totalUnitsCount),
+        totalUnits:            Number(totalUnitsCount),
         assignedDistributorId: distributorId
       }, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
-      setFormSuccess(`MINT SUCCESS: Batch ${batchId} cryptographically verified and anchored on-chain!`);
-      // Reset form variables
+      setFormSuccess(
+        `MINT SUCCESS: Batch ${batchId} cryptographically verified and anchored on-chain!`
+      );
+      // Reset form to initial state so the user can immediately mint the next batch
       setBatchId('');
       setProductVariant('');
       loadDashboardData();
+
     } catch (err) {
-      setFormError(err.response?.data?.message || 'Transaction submission error.');
+      // ── Discriminated error extraction ────────────────────────────────────
+      // Using optional chaining at every level so this catch block itself
+      // cannot throw (e.g. when err is a non-Error thrown value or undefined).
+      const httpStatus  = err?.response?.status;
+      const apiMessage  = err?.response?.data?.message
+                       ?? err?.response?.data?.error
+                       ?? null;
+      const fallbackMsg = (err instanceof Error)
+        ? err.message
+        : 'Batch creation pipeline failed: an unexpected error occurred.';
+
+      if (httpStatus === 401 || (apiMessage && /token|expired|invalid|unauthorized/i.test(apiMessage))) {
+        // Server explicitly rejected the JWT — surface the session banner
+        raiseSessionError(
+          apiMessage || 'Token is invalid or expired. Please re-authenticate.'
+        );
+      } else {
+        // Network / validation / server error — surface the inline error bar
+        setFormError(`Batch creation pipeline failed: ${apiMessage ?? fallbackMsg}`);
+      }
+
     } finally {
+      // Always unblock the button — runs whether the request succeeded or threw
       setFormLoading(false);
     }
   };
@@ -258,12 +351,24 @@ const ManufacturerDashboard = ({ token, user }) => {
         headers: { Authorization: `Bearer ${token}` }
       });
 
-      // Show temporary toast feedback
       const activeLog = `⚡ ${subBatchId} activated successfully. ${response.data.activatedUnits} items live.`;
       setActivationLogs(prev => [activeLog, ...prev]);
       loadDashboardData();
+
     } catch (err) {
-      alert(err.response?.data?.message || 'Logistic activation failed.');
+      const httpStatus = err?.response?.status;
+      const apiMessage = err?.response?.data?.message ?? err?.response?.data?.error ?? null;
+
+      if (httpStatus === 401 || (apiMessage && /token|expired|invalid|unauthorized/i.test(apiMessage))) {
+        // Re-use the session banner so all auth errors appear in the same UI slot
+        raiseSessionError(
+          apiMessage || 'Token is invalid or expired. Please re-authenticate.'
+        );
+      } else {
+        setFormError(
+          `Logistic activation failed: ${apiMessage ?? (err instanceof Error ? err.message : 'Unknown error')}`
+        );
+      }
     }
   };
 
@@ -390,25 +495,79 @@ const ManufacturerDashboard = ({ token, user }) => {
                 </div>
               </div>
 
-              {formSuccess && (
-                <div className="bg-cyber-emerald/10 border border-cyber-emerald/20 text-cyber-emerald text-[10px] font-mono p-3.5 rounded-xl leading-relaxed">
-                  {formSuccess}
-                </div>
-              )}
+              {/* ── Session Auth Error Banner ──────────────────────────────── */}
+              {/* Renders ONLY when raiseSessionError() has been called —       */}
+              {/* never shown by default. X button calls setSessionError(null). */}
+              <AnimatePresence>
+                {sessionError && (
+                  <motion.div
+                    key="session-error-banner"
+                    initial={{ opacity: 0, y: -6, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0,  scale: 1    }}
+                    exit={{    opacity: 0, y: -6, scale: 0.98 }}
+                    transition={{ duration: 0.18 }}
+                    className="flex items-start gap-2.5 bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[10px] font-mono p-3.5 rounded-xl leading-relaxed shadow-[0_0_20px_rgba(245,158,11,0.08)]"
+                  >
+                    <ShieldAlert className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-400 animate-pulse" />
+                    <div className="flex-1 space-y-0.5">
+                      <p className="font-bold uppercase tracking-widest text-amber-300 text-[9px]">Session Token Error</p>
+                      <p className="text-amber-400/90">{sessionError}</p>
+                    </div>
+                    {/* X dismiss — clears sessionError state and cancels the auto-dismiss timer */}
+                    <button
+                      type="button"
+                      onClick={dismissSessionError}
+                      className="text-amber-600 hover:text-amber-200 transition-colors shrink-0 ml-1 rounded p-0.5 hover:bg-amber-500/10"
+                      aria-label="Dismiss session error"
+                      title="Dismiss"
+                    >
+                      <XCircle className="w-3.5 h-3.5" />
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
-              {formError && (
-                <div className="bg-cyber-crimson/10 border border-cyber-crimson/20 text-cyber-crimson text-[10px] font-mono p-3.5 rounded-xl leading-relaxed">
-                  {formError}
-                </div>
-              )}
+              {/* ── Mint Success Confirmation ───────────────────────────────── */}
+              <AnimatePresence>
+                {formSuccess && (
+                  <motion.div
+                    key="form-success"
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{    opacity: 0        }}
+                    className="bg-cyber-emerald/10 border border-cyber-emerald/20 text-cyber-emerald text-[10px] font-mono p-3.5 rounded-xl leading-relaxed"
+                  >
+                    {formSuccess}
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
+              {/* ── General Pipeline Error ─────────────────────────────────── */}
+              <AnimatePresence>
+                {formError && (
+                  <motion.div
+                    key="form-error"
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{    opacity: 0        }}
+                    className="bg-cyber-crimson/10 border border-cyber-crimson/20 text-cyber-crimson text-[10px] font-mono p-3.5 rounded-xl leading-relaxed"
+                  >
+                    {formError}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* ── INITIALIZE ENCRYPTION MINT Submit Button ───────────────── */}
               <button
                 type="submit"
                 disabled={formLoading}
-                className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl font-bold text-xs bg-gradient-to-r from-cyber-purple to-cyber-cyan hover:brightness-110 active:scale-[0.98] transition-all text-white shadow-lg shadow-cyber-purple/20 disabled:opacity-50"
+                className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl font-bold text-xs bg-gradient-to-r from-cyber-purple to-cyber-cyan hover:brightness-110 active:scale-[0.98] transition-all text-white shadow-lg shadow-cyber-purple/20 disabled:opacity-60 disabled:cursor-not-allowed disabled:active:scale-100"
               >
                 {formLoading ? (
-                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>PROCESSING MINT...</span>
+                  </>
                 ) : (
                   <>
                     <span>INITIALIZE ENCRYPTION MINT</span>
