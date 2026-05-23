@@ -15,6 +15,7 @@ const {
   setUseMemoryStore,
   isUsingMemoryStore
 } = require('./models');
+const { verifyDeviceHandler } = require('./controllers/verifyController');
 
 // ------------------------------------------------------------------------
 // IN-MEMORY USER REGISTRY FALLBACK
@@ -862,6 +863,82 @@ app.post('/api/verify/:childId', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: 'Scan validation system crash', error: error.message });
+  }
+});
+
+// ------------------------------------------------------------------------
+// DEVICE-LEVEL HARDCAP VERIFICATION (verifyController.js)
+// POST /api/verify-device — Three-rule scan limiter (Rules A, B, C)
+// No auth required — public consumer endpoint.
+// ------------------------------------------------------------------------
+app.post('/api/verify-device', verifyDeviceHandler);
+
+// ------------------------------------------------------------------------
+// BULK QR INGESTION ENDPOINT
+// POST /api/batch/ingest — Accepts array of raw serial strings from
+//   the ManufacturerUpload CSV/TXT parser and registers them as INACTIVE
+//   ChildQR entries. Protected: MANUFACTURER/ADMIN only.
+// ------------------------------------------------------------------------
+app.post('/api/batch/ingest', authenticateToken, authorizeRoles('MANUFACTURER', 'ADMIN'), async (req, res) => {
+  try {
+    const { serials, batchId, productVariant } = req.body;
+
+    if (!Array.isArray(serials) || serials.length === 0) {
+      return res.status(400).json({ message: 'serials must be a non-empty array of strings.' });
+    }
+    if (!batchId) {
+      return res.status(400).json({ message: 'batchId is required for bulk ingestion.' });
+    }
+
+    const ingestionResults = { created: 0, skipped: 0, errors: [] };
+
+    for (const rawSerial of serials) {
+      const childId = String(rawSerial).trim();
+      if (!childId) continue;
+
+      try {
+        const existing = await ChildQR.findOne({ childId });
+        if (existing) {
+          ingestionResults.skipped++;
+          continue;
+        }
+
+        // Hash the raw serial so it maps to our provenance chain
+        const serialHash = require('crypto').createHash('sha256').update(childId).digest('hex');
+
+        await new ChildQR({
+          childId,
+          parentBatchId: batchId,
+          subBatchId:    batchId + '-BULK',
+          status:        'INACTIVE',
+          cryptoHash:    serialHash,
+          productVariant: productVariant || 'BULK_INGESTED',
+          createdAt:     new Date()
+        }).save();
+
+        ingestionResults.created++;
+      } catch (itemErr) {
+        ingestionResults.errors.push({ serial: rawSerial, error: itemErr.message });
+      }
+    }
+
+    // Log a simulated blockchain event for the ingestion batch
+    const txHash = createSimulatedBlock('BULK_INGEST', {
+      batchId,
+      totalIngested: ingestionResults.created,
+      skipped: ingestionResults.skipped
+    });
+
+    console.log(`📦 [BulkIngest] Completed. Created: ${ingestionResults.created}, Skipped: ${ingestionResults.skipped}, Errors: ${ingestionResults.errors.length}`);
+
+    return res.status(200).json({
+      message: `Bulk ingestion complete. ${ingestionResults.created} new units registered.`,
+      ...ingestionResults,
+      txHash
+    });
+  } catch (error) {
+    console.error('❌ [BulkIngest] Route crash:', error.message);
+    return res.status(500).json({ message: 'Bulk ingestion system failure.', error: error.message });
   }
 });
 

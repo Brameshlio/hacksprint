@@ -73,3 +73,14 @@
     box-shadow: 0 0 10px rgba(0, 242, 254, 0.2);
   }
 }
+
+@keyframes scan {
+  0% { transform: translateY(0); }
+  50% { transform: translateY(250px); }
+  100% { transform: translateY(0); }
+}
+
+.animate-scan {
+  animation: scan 2s linear infinite;
+}
+

@@ -1,17 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, LayoutDashboard, Brain, Activity, Cpu, LogOut, ScanLine, User as UserIcon } from 'lucide-react';
+import { Shield, LayoutDashboard, Brain, Activity, Cpu, LogOut, ScanLine, User as UserIcon, Upload, Radio } from 'lucide-react';
 import Auth from './pages/Auth';
 import ManufacturerDashboard from './pages/ManufacturerDashboard';
+import ManufacturerUpload from './components/ManufacturerUpload';
 import AiFraudDashboard from './pages/AiFraudDashboard';
 import BlockchainActivity from './pages/BlockchainActivity';
 import ConsumerVerification from './pages/ConsumerVerification';
+import LandingHero from './components/LandingHero';
+import TelemetryFeed from './components/TelemetryFeed';
 import ErrorBoundary from './components/ErrorBoundary';
 import axios from 'axios';
 
 function App() {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(null);
-  const [activeTab, setActiveTab] = useState('consumer'); // defaults to consumer scan page so Frank can scan immediately
+  const [activeTab, setActiveTab] = useState('landing'); // defaults to landing hero page
   const [networkStatus, setNetworkStatus] = useState('polygon-amoy'); // visual Amoy Testnet ledger status indicator
   const [walletAddress, setWalletAddress] = useState('0x71C7...476B');
   const [sandboxMode, setSandboxMode] = useState(false);
@@ -39,7 +42,7 @@ function App() {
     if (cachedToken && cachedUser) {
       setToken(cachedToken);
       setUser(JSON.parse(cachedUser));
-      setActiveTab('manufacturer'); // default to dashboard if signed in
+      setActiveTab('consumer'); // default to consumer tab if signed in
     }
   }, []);
 
@@ -61,16 +64,23 @@ function App() {
     setToken(null);
     localStorage.removeItem('nutrichain_token');
     localStorage.removeItem('nutrichain_user');
-    setActiveTab('consumer');
+    setActiveTab('landing');
   };
 
   // Nav configuration
   const navigationItems = [
-    { id: 'consumer', label: 'Consumer Verification', icon: ScanLine, roles: ['ANY'] },
-    { id: 'manufacturer', label: 'Manufacturer Terminal', icon: LayoutDashboard, roles: ['MANUFACTURER', 'ADMIN'] },
-    { id: 'ai-intelligence', label: 'AI Threat Hub', icon: Brain, roles: ['MANUFACTURER', 'DISTRIBUTOR', 'ADMIN'] },
-    { id: 'blockchain', label: 'On-Chain Ledger', icon: Activity, roles: ['MANUFACTURER', 'DISTRIBUTOR', 'ADMIN'] }
+    { id: 'consumer',         label: 'Consumer Verification',  icon: ScanLine,          roles: ['ANY'] },
+    { id: 'manufacturer',    label: 'Manufacturer Terminal',  icon: LayoutDashboard,   roles: ['MANUFACTURER', 'ADMIN'] },
+    { id: 'batch-upload',    label: 'Batch QR Workspace',     icon: Upload,            roles: ['MANUFACTURER', 'ADMIN'] },
+    { id: 'ai-intelligence', label: 'AI Threat Hub',          icon: Brain,             roles: ['MANUFACTURER', 'DISTRIBUTOR', 'ADMIN'] },
+    { id: 'telemetry',       label: 'Live Telemetry',         icon: Radio,             roles: ['MANUFACTURER', 'DISTRIBUTOR', 'ADMIN'] },
+    { id: 'blockchain',      label: 'On-Chain Ledger',        icon: Activity,          roles: ['MANUFACTURER', 'DISTRIBUTOR', 'ADMIN'] }
   ];
+
+  // Landing hero is a full-bleed page — skip the chrome
+  if (activeTab === 'landing') {
+    return <LandingHero onEnterApp={() => setActiveTab('consumer')} />;
+  }
 
   return (
     <div className="min-h-screen flex flex-col selection:bg-cyber-cyan selection:text-black">
@@ -198,8 +208,16 @@ function App() {
             <ManufacturerDashboard token={token} user={user} />
           )}
 
+          {activeTab === 'batch-upload' && user && (
+            <ManufacturerUpload token={token} />
+          )}
+
           {activeTab === 'ai-intelligence' && user && (
             <AiFraudDashboard token={token} />
+          )}
+
+          {activeTab === 'telemetry' && user && (
+            <TelemetryFeed token={token} />
           )}
 
           {activeTab === 'blockchain' && user && (

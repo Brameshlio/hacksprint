@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { Layers, CheckCircle2, ShieldAlert, Zap, PlusCircle, ArrowRight, RefreshCw, BarChart2, Database, Settings, Activity } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Layers, CheckCircle2, ShieldAlert, Zap, PlusCircle, ArrowRight, RefreshCw, BarChart2, Database, Settings, Activity, QrCode, Scan } from 'lucide-react';
+import { Html5Qrcode } from 'html5-qrcode';
 import axios from 'axios';
 
 const ManufacturerDashboard = ({ token, user }) => {
@@ -61,8 +62,12 @@ const ManufacturerDashboard = ({ token, user }) => {
   // Minting form parameters
   const [batchId, setBatchId] = useState('');
   const [productVariant, setProductVariant] = useState('');
-  const [totalUnits, setTotalUnits] = useState(20); // default group size to see child lists immediately
+  const [totalUnitsCount, setTotalUnitsCount] = useState(20); // default group size to see child lists immediately
   const [distributorId, setDistributorId] = useState('DIST-GLOBAL-SUPPLY');
+
+  // Scanner and custom Toast states
+  const [scanning, setScanning] = useState(false);
+  const [toast, setToast] = useState('');
 
   const [formLoading, setFormLoading] = useState(false);
   const [formSuccess, setFormSuccess] = useState('');
@@ -98,6 +103,125 @@ const ManufacturerDashboard = ({ token, user }) => {
     return () => clearInterval(interval);
   }, []);
 
+  const showToast = (msg) => {
+    setToast(msg);
+    setTimeout(() => {
+      setToast('');
+    }, 4000);
+  };
+
+  const handleQrCodeDecoded = (decodedText) => {
+    try {
+      let parsedData = {};
+
+      if (decodedText.trim().startsWith('{')) {
+        const json = JSON.parse(decodedText);
+        parsedData.batchId = json.batchId || json.id;
+        parsedData.productVariant = json.productVariant || json.variant;
+        parsedData.totalUnits = json.totalUnits || json.units;
+      } else {
+        let searchParams;
+        if (decodedText.includes('?')) {
+          const queryString = decodedText.split('?')[1];
+          searchParams = new URLSearchParams(queryString);
+        } else {
+          searchParams = new URLSearchParams(decodedText);
+        }
+
+        parsedData.batchId = searchParams.get('batchId') || searchParams.get('id');
+        parsedData.productVariant = searchParams.get('productVariant') || searchParams.get('variant');
+        parsedData.totalUnits = searchParams.get('totalUnits') || searchParams.get('units');
+      }
+
+      // Regex / fallback checks
+      if (!parsedData.batchId) {
+        const batchMatch = decodedText.match(/(?:batchId|id)[:=]([^&,\s}]+)/i) || decodedText.match(/(?:SAMPLE-BATCH|BATCH)-\w+/i);
+        if (batchMatch) {
+          parsedData.batchId = batchMatch[1] || batchMatch[0];
+        }
+      }
+      if (!parsedData.productVariant) {
+        const variantMatch = decodedText.match(/(?:productVariant|variant)[:=]([^&,\s}]+)/i);
+        if (variantMatch) {
+          parsedData.productVariant = decodeURIComponent(variantMatch[1]);
+        }
+      }
+      if (!parsedData.totalUnits) {
+        const unitsMatch = decodedText.match(/(?:totalUnits|units)[:=](\d+)/i);
+        if (unitsMatch) {
+          parsedData.totalUnits = parseInt(unitsMatch[1], 10);
+        }
+      }
+
+      if (parsedData.batchId) {
+        setBatchId(parsedData.batchId.toUpperCase().replace(/['"]/g, ''));
+      }
+      if (parsedData.productVariant) {
+        setProductVariant(parsedData.productVariant.replace(/['"]/g, ''));
+      }
+      if (parsedData.totalUnits) {
+        setTotalUnitsCount(Number(parsedData.totalUnits));
+      }
+
+      showToast("⚡ Sample Label Decoded: Batch Parameters Ingested Successfully");
+      setScanning(false);
+    } catch (err) {
+      console.error("QR Ingest Parse Error:", err);
+      // Fallback
+      if (decodedText && decodedText.length < 50) {
+        setBatchId(decodedText.toUpperCase());
+        showToast("⚡ Sample Label Decoded: Set Batch ID");
+        setScanning(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    let html5QrCode = null;
+
+    if (scanning) {
+      const timer = setTimeout(() => {
+        try {
+          html5QrCode = new Html5Qrcode("manufacturer-qr-reader");
+          html5QrCode.start(
+            { facingMode: "environment" },
+            {
+              fps: 10,
+              qrbox: { width: 220, height: 220 }
+            },
+            (decodedText) => {
+              handleQrCodeDecoded(decodedText);
+            },
+            (errorMessage) => {
+              // Silent camera scan errors
+            }
+          ).catch(err => {
+            console.error("Failed to start Html5Qrcode:", err);
+          });
+        } catch (err) {
+          console.error("Failed to initialize Html5Qrcode:", err);
+        }
+      }, 150);
+
+      return () => {
+        clearTimeout(timer);
+        if (html5QrCode) {
+          if (html5QrCode.isScanning) {
+            html5QrCode.stop()
+              .then(() => {
+                html5QrCode.clear();
+              })
+              .catch(err => console.error("Failed to stop Html5Qrcode cleanly:", err));
+          } else {
+            try {
+              html5QrCode.clear();
+            } catch (e) {}
+          }
+        }
+      };
+    }
+  }, [scanning]);
+
   const handleMintBatch = async (e) => {
     e.preventDefault();
     setFormLoading(true);
@@ -108,7 +232,7 @@ const ManufacturerDashboard = ({ token, user }) => {
       const response = await axios.post('/api/batches', {
         batchId,
         productVariant,
-        totalUnits: Number(totalUnits),
+        totalUnits: Number(totalUnitsCount),
         assignedDistributorId: distributorId
       }, {
         headers: { Authorization: `Bearer ${token}` }
@@ -208,15 +332,25 @@ const ManufacturerDashboard = ({ token, user }) => {
             
             <form onSubmit={handleMintBatch} className="space-y-4">
               <div className="flex flex-col gap-1">
-                <label className="text-[10px] font-mono text-neutral-400">Unique Batch Identifer ID</label>
-                <input
-                  type="text"
-                  placeholder="e.g. BATCH-2026-X99"
-                  value={batchId}
-                  onChange={(e) => setBatchId(e.target.value.toUpperCase())}
-                  required
-                  className="cyber-input text-xs"
-                />
+                <label className="text-[10px] font-mono text-neutral-400">Unique Batch Identifier ID</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="e.g. BATCH-2026-X99"
+                    value={batchId}
+                    onChange={(e) => setBatchId(e.target.value.toUpperCase())}
+                    required
+                    className="cyber-input text-xs flex-1 min-w-0"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setScanning(true)}
+                    className="glass-panel px-3.5 py-2.5 rounded-xl border border-cyber-cyan/30 text-cyber-cyan hover:bg-cyber-cyan/15 hover:text-white transition-all duration-200 flex items-center gap-1.5 font-mono text-[10px] font-bold shrink-0"
+                  >
+                    <QrCode className="w-3.5 h-3.5" />
+                    <span>Scan Pre-Print Label</span>
+                  </button>
+                </div>
               </div>
 
               <div className="flex flex-col gap-1">
@@ -238,8 +372,8 @@ const ManufacturerDashboard = ({ token, user }) => {
                     type="number"
                     min="1"
                     max="1000"
-                    value={totalUnits}
-                    onChange={(e) => setTotalUnits(e.target.value)}
+                    value={totalUnitsCount}
+                    onChange={(e) => setTotalUnitsCount(e.target.value)}
                     required
                     className="cyber-input text-xs"
                   />
@@ -457,7 +591,7 @@ const ManufacturerDashboard = ({ token, user }) => {
                   return (
                     <tr key={scan._id} className="hover:bg-white/[0.01] transition-all">
                       <td className="p-4 font-bold text-neutral-200">{scan.childId.substring(0, 16)}...</td>
-                      <td className="p-4 text-neutral-400">{scan.location.lat.toFixed(4)}, {scan.location.lng.toFixed(4)}</td>
+                      <td className="p-4 text-neutral-400">GPS: {scan.location.lat.toFixed(4)}, {scan.location.lng.toFixed(4)} {scan.location.name.includes('BLR') || scan.location.name.includes('Bengaluru') ? '[BLR_MANUFACTURER]' : '[BOM_DISTRIBUTOR]'}</td>
                       <td className="p-4 text-neutral-300">{scan.location.name}</td>
                       <td className="p-4">
                         <span className={`px-2 py-0.5 rounded font-extrabold text-[9px] ${
@@ -484,6 +618,112 @@ const ManufacturerDashboard = ({ token, user }) => {
           </table>
         </div>
       </div>
+
+      {/* Sleek Glassmorphic Floating Toast Feedback */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: -50, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -50, scale: 0.9 }}
+            className="fixed top-6 right-6 z-50 glass-panel px-5 py-3.5 rounded-2xl border-cyber-emerald/30 shadow-2xl flex items-center gap-2"
+          >
+            <span className="w-2 h-2 rounded-full bg-cyber-emerald animate-ping" />
+            <span className="text-cyber-emerald font-extrabold text-xs tracking-wide font-mono">
+              {toast}
+            </span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Sleek Glassmorphic Camera Scan Modal overlay */}
+      <AnimatePresence>
+        {scanning && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 20 }}
+              className="glass-panel w-full max-w-md p-6 rounded-3xl border border-white/[0.08] relative overflow-hidden"
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <Scan className="w-5 h-5 text-cyber-cyan animate-pulse" />
+                  <h3 className="text-sm font-extrabold font-mono uppercase tracking-wider text-white">Pre-Print Label Scanner</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setScanning(false)}
+                  className="text-neutral-400 hover:text-white font-mono text-xs border border-white/[0.08] px-2.5 py-1.5 rounded-xl bg-white/[0.02] hover:bg-white/[0.06] transition-all"
+                >
+                  Close
+                </button>
+              </div>
+
+              {/* Camera Video Feed Box */}
+              <div className="relative aspect-square w-full max-w-sm mx-auto overflow-hidden rounded-2xl border border-white/10 bg-black/60 flex items-center justify-center mb-4">
+                <div id="manufacturer-qr-reader" className="w-full h-full" />
+                
+                {/* Visual scan frame overlay */}
+                <div className="absolute inset-10 border border-cyber-cyan/30 rounded-xl pointer-events-none flex items-center justify-center">
+                  <div className="w-full h-0.5 bg-gradient-to-r from-transparent via-cyber-cyan to-transparent animate-scan absolute" />
+                </div>
+              </div>
+
+              {/* Mock Simulator dropdown section */}
+              <div className="space-y-3 pt-3 border-t border-white/[0.05]">
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] font-mono text-neutral-400">INJECT DEMO QR LABEL PARAMETERS</label>
+                    <span className="text-cyber-cyan uppercase font-bold text-[8px] font-mono tracking-wider">Webcam Bypass</span>
+                  </div>
+                  <select
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        handleQrCodeDecoded(e.target.value);
+                      }
+                      e.target.value = '';
+                    }}
+                    className="cyber-input text-xs font-mono w-full bg-black/40 cursor-pointer border-white/10 text-neutral-300"
+                  >
+                    <option value="" className="bg-neutral-900 text-neutral-400">-- Select Demo Label --</option>
+                    <option 
+                      value='{"batchId":"DEMO-BATCH-WHEY","variant":"Whey Isolate Double Chocolate (5 lbs)","units":50}'
+                      className="bg-neutral-900 text-neutral-200"
+                    >
+                      Sample Label A: Whey Isolate 50 Units (JSON)
+                    </option>
+                    <option 
+                      value="nutrichain://mint?id=DEMO-BATCH-CREATINE&variant=Creatine%20Monohydrate%20Pure&units=120"
+                      className="bg-neutral-900 text-neutral-200"
+                    >
+                      Sample Label B: Creatine Monohydrate 120 Units (Deep Link)
+                    </option>
+                    <option 
+                      value='{"batchId":"DEMO-BATCH-PRE","variant":"Pre-Workout Blast Blue Raspberry","units":30}'
+                      className="bg-neutral-900 text-neutral-200"
+                    >
+                      Sample Label C: Pre-Workout Blast 30 Units (JSON)
+                    </option>
+                    <option 
+                      value="nutrichain://mint?id=DEMO-BATCH-GLUTAMINE&variant=Glutamine%20Recovery%20Powder&units=80"
+                      className="bg-neutral-900 text-neutral-200"
+                    >
+                      Sample Label D: Glutamine Recovery 80 Units (Deep Link)
+                    </option>
+                  </select>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
     </div>
   );

@@ -8,9 +8,9 @@ const ConsumerVerification = () => {
   const [childId, setChildId] = useState('');
   
   // Geolocation states
-  const [lat, setLat] = useState(40.7128); // defaults to NYC
-  const [lng, setLng] = useState(-74.0060);
-  const [locationName, setLocationName] = useState('New York Retail Outlet');
+  const [lat, setLat] = useState(12.9716); // defaults to Bengaluru
+  const [lng, setLng] = useState(77.5946);
+  const [locationName, setLocationName] = useState('Kempegowda Logistics Zone, Bengaluru');
 
   // Dev Sanity Panel states & fetchers
   const [devStatus, setDevStatus] = useState({
@@ -141,7 +141,7 @@ const ConsumerVerification = () => {
     }
   };
 
-  // Quick sandbox helper triggers (New York vs. London geographical leaps to test AI Isolation Forest)
+  // Quick sandbox helper triggers (Bengaluru vs. Mumbai geographical leaps to test AI Isolation Forest)
   const handleQuickCoordinateSet = (latitude, longitude, name) => {
     setLat(latitude);
     setLng(longitude);
@@ -343,17 +343,17 @@ const ConsumerVerification = () => {
 
             <div className="grid grid-cols-2 gap-2 text-[10px] font-mono text-neutral-400">
               <button
-                onClick={() => handleQuickCoordinateSet(40.7128, -74.0060, 'Retail Outlet New York, USA')}
-                className={`w-full py-2 border rounded-xl transition-all flex items-center justify-center gap-1.5 ${locationName.includes('New York') ? 'bg-cyber-cyan/15 text-cyber-cyan border-cyber-cyan/30 font-bold' : 'bg-white/[0.01] hover:bg-white/[0.02] border-white/[0.05]'}`}
+                onClick={() => handleQuickCoordinateSet(12.9716, 77.5946, 'KA-BLR Production Floor')}
+                className={`w-full py-2 border rounded-xl transition-all flex items-center justify-center gap-1.5 ${locationName.includes('BLR') || locationName.includes('Bengaluru') ? 'bg-cyber-cyan/15 text-cyber-cyan border-cyber-cyan/30 font-bold' : 'bg-white/[0.01] hover:bg-white/[0.02] border-white/[0.05]'}`}
               >
-                <MapPin className="w-3 h-3" /> NYC Outlet
+                <MapPin className="w-3 h-3" /> BLR Hub
               </button>
               
               <button
-                onClick={() => handleQuickCoordinateSet(51.5074, -0.1278, 'Distributor Dock London, UK')}
-                className={`w-full py-2 border rounded-xl transition-all flex items-center justify-center gap-1.5 ${locationName.includes('London') ? 'bg-cyber-cyan/15 text-cyber-cyan border-cyber-cyan/30 font-bold' : 'bg-white/[0.01] hover:bg-white/[0.02] border-white/[0.05]'}`}
+                onClick={() => handleQuickCoordinateSet(19.0760, 72.8777, 'MH-BOM Retail Network')}
+                className={`w-full py-2 border rounded-xl transition-all flex items-center justify-center gap-1.5 ${locationName.includes('BOM') ? 'bg-cyber-cyan/15 text-cyber-cyan border-cyber-cyan/30 font-bold' : 'bg-white/[0.01] hover:bg-white/[0.02] border-white/[0.05]'}`}
               >
-                <MapPin className="w-3 h-3" /> London Dock
+                <MapPin className="w-3 h-3" /> BOM Retail
               </button>
             </div>
 
